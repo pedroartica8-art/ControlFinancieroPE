@@ -118,7 +118,7 @@ public class MainActivity extends Activity {
         Snap s = snapshot();
 
         box.addView(title("Resumen de " + YearMonth.now()));
-        box.addView(card(s.verdict, s.endProjection < 0 ? RED : GREEN, true));
+        box.addView(card(s.verdict, 14, s.endProjection < 0 ? RED : GREEN, true));
 
         LinearLayout r1 = row();
         r1.addView(kpi("Saldo visible", s.visible, BLUE), wt());
