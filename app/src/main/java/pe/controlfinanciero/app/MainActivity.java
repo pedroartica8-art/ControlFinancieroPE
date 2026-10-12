@@ -68,6 +68,8 @@ public class MainActivity extends Activity {
         db = new DB(this);
         sp = getSharedPreferences("cfg", MODE_PRIVATE);
         seed();
+        getWindow().setStatusBarColor(BG);
+        getWindow().setNavigationBarColor(BG);
         setContentView(shell());
         dashboard();
     }
@@ -87,9 +89,8 @@ public class MainActivity extends Activity {
         LinearLayout root = vbox(0);
         root.setBackgroundColor(BG);
 
-        LinearLayout header = vbox(14);
-        header.addView(txt("Control Financiero", 24, TEXT, true));
-        header.addView(txt("Registro diario • límites • exportación a Excel", 12, MUTED, false));
+        LinearLayout header = vbox(8);
+        header.addView(txt("Control Financiero", 18, TEXT, true));
         root.addView(header);
 
         body = new FrameLayout(this);
@@ -97,16 +98,19 @@ public class MainActivity extends Activity {
 
         LinearLayout nav = new LinearLayout(this);
         nav.setOrientation(LinearLayout.HORIZONTAL);
-        String[] labels = {"Inicio", "Registrar", "Movs", "Pagos", "Ajustes"};
+        nav.setPadding(dp(4), dp(2), dp(4), dp(4));
+
+        String[] labels = {"Inicio", "+ Agregar", "Movs", "Pagos", "Ajustes"};
         for (String label : labels) {
-            Button x = btn(label);
-            nav.addView(x, new LinearLayout.LayoutParams(0, dp(52), 1f));
+            Button x = navButton(label);
+            nav.addView(x, new LinearLayout.LayoutParams(0, dp(44), 1f));
         }
         ((Button) nav.getChildAt(0)).setOnClickListener(v -> dashboard());
         ((Button) nav.getChildAt(1)).setOnClickListener(v -> movementForm(null));
         ((Button) nav.getChildAt(2)).setOnClickListener(v -> movements());
         ((Button) nav.getChildAt(3)).setOnClickListener(v -> payments());
         ((Button) nav.getChildAt(4)).setOnClickListener(v -> settings());
+
         root.addView(nav);
         return root;
     }
@@ -114,71 +118,132 @@ public class MainActivity extends Activity {
     void dashboard() {
         body.removeAllViews();
         ScrollView sv = new ScrollView(this);
-        LinearLayout box = vbox(14);
-        Snap s = snapshot();
+        sv.setFillViewport(true);
+        LinearLayout box = vbox(10);
+        Snap snap = snapshot();
 
-        box.addView(title("Resumen de " + YearMonth.now()));
-        box.addView(card(s.verdict, 14, s.endProjection < 0 ? RED : GREEN, true));
+        TextView month = txt("Resumen • " + YearMonth.now(), 13, MUTED, false);
+        month.setPadding(dp(6), dp(2), dp(6), dp(4));
+        box.addView(month);
+
+        TextView hero = card(
+                snap.verdict + "\nS/ " + m(snap.spendable) + " disponibles para gastar",
+                15,
+                snap.endProjection < 0 ? RED : GREEN,
+                true
+        );
+        hero.setPadding(dp(12), dp(10), dp(12), dp(10));
+        box.addView(hero);
 
         LinearLayout r1 = row();
-        r1.addView(kpi("Saldo visible", s.visible, BLUE), wt());
-        r1.addView(kpi("Gastable", s.spendable, GREEN), wt());
+        r1.addView(compactKpi("Saldo", snap.visible, BLUE), wt());
+        r1.addView(compactKpi("Hoy", snap.daily, AMBER), wt());
         box.addView(r1);
 
         LinearLayout r2 = row();
-        r2.addView(kpi("Límite diario", s.daily, AMBER), wt());
-        r2.addView(kpi("Límite semanal", s.weekly, AMBER), wt());
+        r2.addView(compactKpi("Semana", snap.weekly, AMBER), wt());
+        r2.addView(compactKpi("Ahorro pend.", snap.savePending, GREEN), wt());
         box.addView(r2);
 
-        box.addView(block("¿Me alcanza?", s.advice));
-        box.addView(block(
-                "Compromisos",
-                "Pagos mensuales pendientes: S/ " + m(s.pending) +
-                        "\nAhorro objetivo pendiente: S/ " + m(s.savePending) +
-                        "\nSaldo mínimo intocable: S/ " + m(s.minimum)
-        ));
-        box.addView(block(
-                "Mes actual",
-                "Ingresos: S/ " + m(s.income) +
-                        "\nGastos: S/ " + m(s.expenses) +
-                        "\nAhorro: S/ " + m(s.savings) +
-                        "\nPago de deuda: S/ " + m(s.debt) +
-                        "\nPréstamos recibidos: S/ " + m(s.loans)
-        ));
+        box.addView(sectionLabel("Accesos rápidos"));
 
-        Button evaluate = primary("EVALUARME");
-        evaluate.setOnClickListener(v -> new AlertDialog.Builder(this)
-                .setTitle(s.verdict)
-                .setMessage(s.advice +
-                        "\n\nProyección de cierre: S/ " + m(s.endProjection) +
-                        "\nDías restantes: " + s.days)
-                .setPositiveButton("Entendido", null)
-                .show());
-        box.addView(evaluate);
+        LinearLayout q1 = row();
+        Button gasto = quickAction("− Gasto");
+        Button ingreso = quickAction("+ Ingreso");
+        q1.addView(gasto, wt());
+        q1.addView(ingreso, wt());
+        box.addView(q1);
 
-        Button copy = btn("COPIAR ESTA SEMANA PARA EXCEL");
+        LinearLayout q2 = row();
+        Button ahorro = quickAction("Ahorro");
+        Button movs = quickAction("Movimientos");
+        q2.addView(ahorro, wt());
+        q2.addView(movs, wt());
+        box.addView(q2);
+
+        LinearLayout q3 = row();
+        Button pagos = quickAction("Pagos");
+        Button evaluar = quickAction("Evaluarme");
+        q3.addView(pagos, wt());
+        q3.addView(evaluar, wt());
+        box.addView(q3);
+
+        gasto.setOnClickListener(v -> movementForm(null, "Gasto"));
+        ingreso.setOnClickListener(v -> movementForm(null, "Ingreso"));
+        ahorro.setOnClickListener(v -> movementForm(null, "Ahorro"));
+        movs.setOnClickListener(v -> movements());
+        pagos.setOnClickListener(v -> payments());
+        evaluar.setOnClickListener(v -> showEvaluation(snap));
+
+        Button detail = btn("Ver detalle del mes");
+        detail.setTextSize(12);
+        detail.setAllCaps(false);
+        detail.setMinHeight(0);
+        detail.setMinimumHeight(0);
+        detail.setPadding(dp(8), dp(5), dp(8), dp(5));
+        detail.setOnClickListener(v -> showMonthDetail(snap));
+        box.addView(detail);
+
+        LinearLayout exports = row();
+        Button copy = miniButton("Copiar a Excel");
+        Button csv = miniButton("Exportar CSV");
+        exports.addView(copy, wt());
+        exports.addView(csv, wt());
         copy.setOnClickListener(v -> copyWeek());
-        box.addView(copy);
-
-        Button csv = btn("EXPORTAR ESTA SEMANA A CSV");
         csv.setOnClickListener(v -> exportWeek());
-        box.addView(csv);
+        box.addView(exports);
 
         sv.addView(box);
         body.addView(sv);
     }
 
+    void showEvaluation(Snap snap) {
+        new AlertDialog.Builder(this)
+                .setTitle(snap.verdict)
+                .setMessage(
+                        snap.advice +
+                        "\n\nProyección de cierre: S/ " + m(snap.endProjection) +
+                        "\nLímite diario: S/ " + m(snap.daily) +
+                        "\nLímite semanal: S/ " + m(snap.weekly)
+                )
+                .setPositiveButton("Entendido", null)
+                .show();
+    }
+
+    void showMonthDetail(Snap snap) {
+        new AlertDialog.Builder(this)
+                .setTitle("Detalle del mes")
+                .setMessage(
+                        "Ingresos: S/ " + m(snap.income) +
+                        "\nGastos: S/ " + m(snap.expenses) +
+                        "\nAhorro: S/ " + m(snap.savings) +
+                        "\nPago de deuda: S/ " + m(snap.debt) +
+                        "\nPagos pendientes: S/ " + m(snap.pending) +
+                        "\nSaldo mínimo intocable: S/ " + m(snap.minimum)
+                )
+                .setPositiveButton("Cerrar", null)
+                .show();
+    }
+
     void movementForm(Long editId) {
+        movementForm(editId, null);
+    }
+
+    void movementForm(Long editId, String presetType) {
         body.removeAllViews();
         ScrollView sv = new ScrollView(this);
-        LinearLayout box = vbox(14);
-        box.addView(title(editId == null ? "Registrar movimiento" : "Editar movimiento"));
+        LinearLayout box = vbox(10);
+        box.addView(txt(editId == null ? "Registrar movimiento" : "Editar movimiento", 18, TEXT, true));
 
         Rec old = editId == null ? null : db.one(editId);
         EditText date = input("Fecha AAAA-MM-DD", old == null ? LocalDate.now().toString() : old.date);
-        Spinner type = spin(TYPES, old == null ? "Gasto" : old.type);
+        String initialType = old != null ? old.type : (presetType == null ? "Gasto" : presetType);
+        Spinner type = spin(TYPES, initialType);
         Spinner cat = spin(CATS, old == null ? "Alimentación" : old.cat);
-        Spinner cls = spin(CLS, old == null ? "Necesidad" : old.cls);
+        String initialClass = old != null ? old.cls :
+                ("Ingreso".equals(initialType) ? "Ingreso" :
+                ("Ahorro".equals(initialType) ? "Ahorro" : "Necesidad"));
+        Spinner cls = spin(CLS, initialClass);
         Spinner nat = spin(NAT, old == null ? "Variable" : old.nat);
         Spinner med = spin(MED, old == null ? "Yape" : old.med);
         EditText concept = input("Concepto", old == null ? "" : old.concept);
@@ -191,7 +256,12 @@ public class MainActivity extends Activity {
                 concept, amount, label("Clasificación"), cls, label("Naturaleza"), nat,
                 label("Medio"), med, dest, note
         };
-        for (View field : fields) box.addView(field);
+        for (View field : fields) {
+            LinearLayout.LayoutParams fp = new LinearLayout.LayoutParams(-1, -2);
+            fp.setMargins(0, 0, 0, dp(2));
+            field.setLayoutParams(fp);
+            box.addView(field);
+        }
 
         Button save = primary("GUARDAR MOVIMIENTO");
         save.setOnClickListener(v -> {
@@ -755,11 +825,28 @@ public class MainActivity extends Activity {
     }
 
     TextView title(String s) {
-        return txt(s, 22, TEXT, true);
+        return txt(s, 18, TEXT, true);
     }
 
     TextView label(String s) {
-        return txt(s, 12, MUTED, false);
+        TextView t = txt(s, 11, MUTED, false);
+        t.setPadding(dp(6), dp(3), dp(6), dp(1));
+        return t;
+    }
+
+    TextView sectionLabel(String s) {
+        TextView t = txt(s, 12, MUTED, true);
+        t.setPadding(dp(6), dp(10), dp(6), dp(4));
+        return t;
+    }
+
+    TextView compactKpi(String heading, double value, int color) {
+        TextView t = card(heading + "\nS/ " + m(value), 13, color, true);
+        t.setPadding(dp(10), dp(8), dp(10), dp(8));
+        LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(0, -2, 1f);
+        p.setMargins(dp(2), dp(2), dp(2), dp(2));
+        t.setLayoutParams(p);
+        return t;
     }
 
     TextView card(String s, int size, int color, boolean bold) {
@@ -783,6 +870,40 @@ public class MainActivity extends Activity {
     Button btn(String s) {
         Button b = new Button(this);
         b.setText(s);
+        b.setTextSize(12);
+        b.setAllCaps(false);
+        b.setMinHeight(0);
+        b.setMinimumHeight(0);
+        b.setPadding(dp(8), dp(7), dp(8), dp(7));
+        return b;
+    }
+
+    Button navButton(String s) {
+        Button b = btn(s);
+        b.setTextSize(10);
+        b.setTextColor(TEXT);
+        b.setBackgroundColor(CARD);
+        b.setPadding(dp(2), dp(2), dp(2), dp(2));
+        return b;
+    }
+
+    Button quickAction(String s) {
+        Button b = btn(s);
+        b.setTextSize(13);
+        b.setTextColor(TEXT);
+        b.setBackgroundColor(CARD);
+        LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(0, dp(48), 1f);
+        p.setMargins(dp(3), dp(3), dp(3), dp(3));
+        b.setLayoutParams(p);
+        return b;
+    }
+
+    Button miniButton(String s) {
+        Button b = btn(s);
+        b.setTextSize(11);
+        LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(0, dp(42), 1f);
+        p.setMargins(dp(3), dp(5), dp(3), 0);
+        b.setLayoutParams(p);
         return b;
     }
 
@@ -799,7 +920,9 @@ public class MainActivity extends Activity {
         e.setText(value);
         e.setTextColor(TEXT);
         e.setHintTextColor(MUTED);
+        e.setTextSize(14);
         e.setSingleLine(false);
+        e.setPadding(dp(8), dp(5), dp(8), dp(5));
         return e;
     }
 
