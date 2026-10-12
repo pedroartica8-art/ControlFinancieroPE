@@ -1,971 +1,175 @@
 package pe.controlfinanciero.app;
 
 import android.app.Activity;
-import android.app.AlertDialog;
 import android.content.ClipData;
-import android.content.ContentValues;
+import android.content.ClipboardManager;
 import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.database.Cursor;
 import android.database.sqlite.SQLiteDatabase;
-import android.database.sqlite.SQLiteOpenHelper;
 import android.graphics.Color;
 import android.os.Bundle;
-import android.text.InputType;
-import android.view.View;
-import android.widget.ArrayAdapter;
-import android.widget.Button;
-import android.widget.EditText;
-import android.widget.FrameLayout;
-import android.widget.LinearLayout;
-import android.widget.ScrollView;
-import android.widget.Spinner;
-import android.widget.TextView;
+import android.webkit.JavascriptInterface;
+import android.webkit.WebSettings;
+import android.webkit.WebView;
+import android.webkit.WebViewClient;
 import android.widget.Toast;
 
+import org.json.JSONArray;
+import org.json.JSONObject;
+
+import java.io.File;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
-import java.time.DayOfWeek;
-import java.time.LocalDate;
-import java.time.YearMonth;
-import java.time.temporal.TemporalAdjusters;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Locale;
 
 public class MainActivity extends Activity {
-    static final String[] TYPES = {
-            "Ingreso", "Gasto", "Ahorro", "Retiro ahorro", "Pago deuda",
-            "Préstamo recibido", "Dinero prestado", "Cobro"
-    };
-    static final String[] CATS = {
-            "Vivienda", "Alimentación", "Moto/Transporte", "Servicios", "Hogar",
-            "Salud", "Educación/Profesión", "Personal/Ocio", "Viajes",
-            "Imprevistos/Otros", "Deudas", "Ahorro/Metas"
-    };
-    static final String[] CLS = {"Necesidad", "Deseo", "Deuda", "Ahorro", "Ingreso"};
-    static final String[] NAT = {"Fijo", "Variable", "Eventual"};
-    static final String[] MED = {"Yape", "Efectivo", "Transferencia", "Tarjeta", "Plin", "Otro"};
-
-    final int BG = Color.rgb(9, 12, 16);
-    final int CARD = Color.rgb(22, 27, 34);
-    final int TEXT = Color.rgb(241, 245, 249);
-    final int MUTED = Color.rgb(160, 174, 192);
-    final int BLUE = Color.rgb(100, 181, 246);
-    final int GREEN = Color.rgb(102, 187, 106);
-    final int RED = Color.rgb(239, 83, 80);
-    final int AMBER = Color.rgb(255, 183, 77);
-
-    DB db;
-    SharedPreferences sp;
-    FrameLayout body;
-    String pendingExport = "";
+    private WebView web;
+    private String pendingText = "";
+    private String pendingName = "export.csv";
+    private String pendingMime = "text/csv";
+    private static final int SAVE_FILE = 41;
 
     @Override
-    public void onCreate(Bundle b) {
-        super.onCreate(b);
-        db = new DB(this);
-        sp = getSharedPreferences("cfg", MODE_PRIVATE);
-        seed();
-        getWindow().setStatusBarColor(BG);
-        getWindow().setNavigationBarColor(BG);
-        setContentView(shell());
-        dashboard();
+    protected void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        getWindow().setStatusBarColor(Color.rgb(14,79,130));
+        getWindow().setNavigationBarColor(Color.WHITE);
+
+        web = new WebView(this);
+        WebSettings s = web.getSettings();
+        s.setJavaScriptEnabled(true);
+        s.setDomStorageEnabled(true);
+        s.setAllowFileAccess(true);
+        s.setAllowContentAccess(true);
+        s.setBuiltInZoomControls(false);
+        s.setDisplayZoomControls(false);
+        s.setTextZoom(100);
+        web.setWebViewClient(new WebViewClient());
+        web.addJavascriptInterface(new Bridge(), "Android");
+        setContentView(web);
+        web.loadUrl("file:///android_asset/index.html");
     }
 
-    void seed() {
-        if (!sp.contains("income")) {
-            sp.edit()
-                    .putString("income", "2000")
-                    .putString("opening", "0")
-                    .putString("minimum", "0")
-                    .putString("saveRate", "0.20")
-                    .apply();
-        }
-    }
-
-    View shell() {
-        LinearLayout root = vbox(0);
-        root.setBackgroundColor(BG);
-
-        LinearLayout header = vbox(8);
-        header.addView(txt("Control Financiero", 18, TEXT, true));
-        root.addView(header);
-
-        body = new FrameLayout(this);
-        root.addView(body, new LinearLayout.LayoutParams(-1, 0, 1f));
-
-        LinearLayout nav = new LinearLayout(this);
-        nav.setOrientation(LinearLayout.HORIZONTAL);
-        nav.setPadding(dp(4), dp(2), dp(4), dp(4));
-
-        String[] labels = {"Inicio", "+ Agregar", "Movs", "Pagos", "Ajustes"};
-        for (String label : labels) {
-            Button x = navButton(label);
-            nav.addView(x, new LinearLayout.LayoutParams(0, dp(44), 1f));
-        }
-        ((Button) nav.getChildAt(0)).setOnClickListener(v -> dashboard());
-        ((Button) nav.getChildAt(1)).setOnClickListener(v -> movementForm(null));
-        ((Button) nav.getChildAt(2)).setOnClickListener(v -> movements());
-        ((Button) nav.getChildAt(3)).setOnClickListener(v -> payments());
-        ((Button) nav.getChildAt(4)).setOnClickListener(v -> settings());
-
-        root.addView(nav);
-        return root;
-    }
-
-    void dashboard() {
-        body.removeAllViews();
-        ScrollView sv = new ScrollView(this);
-        sv.setFillViewport(true);
-        LinearLayout box = vbox(10);
-        Snap snap = snapshot();
-
-        TextView month = txt("Resumen • " + YearMonth.now(), 13, MUTED, false);
-        month.setPadding(dp(6), dp(2), dp(6), dp(4));
-        box.addView(month);
-
-        TextView hero = card(
-                snap.verdict + "\nS/ " + m(snap.spendable) + " disponibles para gastar",
-                15,
-                snap.endProjection < 0 ? RED : GREEN,
-                true
-        );
-        hero.setPadding(dp(12), dp(10), dp(12), dp(10));
-        box.addView(hero);
-
-        LinearLayout r1 = row();
-        r1.addView(compactKpi("Saldo", snap.visible, BLUE), wt());
-        r1.addView(compactKpi("Hoy", snap.daily, AMBER), wt());
-        box.addView(r1);
-
-        LinearLayout r2 = row();
-        r2.addView(compactKpi("Semana", snap.weekly, AMBER), wt());
-        r2.addView(compactKpi("Ahorro pend.", snap.savePending, GREEN), wt());
-        box.addView(r2);
-
-        box.addView(sectionLabel("Accesos rápidos"));
-
-        LinearLayout q1 = row();
-        Button gasto = quickAction("− Gasto");
-        Button ingreso = quickAction("+ Ingreso");
-        q1.addView(gasto, wt());
-        q1.addView(ingreso, wt());
-        box.addView(q1);
-
-        LinearLayout q2 = row();
-        Button ahorro = quickAction("Ahorro");
-        Button movs = quickAction("Movimientos");
-        q2.addView(ahorro, wt());
-        q2.addView(movs, wt());
-        box.addView(q2);
-
-        LinearLayout q3 = row();
-        Button pagos = quickAction("Pagos");
-        Button evaluar = quickAction("Evaluarme");
-        q3.addView(pagos, wt());
-        q3.addView(evaluar, wt());
-        box.addView(q3);
-
-        gasto.setOnClickListener(v -> movementForm(null, "Gasto"));
-        ingreso.setOnClickListener(v -> movementForm(null, "Ingreso"));
-        ahorro.setOnClickListener(v -> movementForm(null, "Ahorro"));
-        movs.setOnClickListener(v -> movements());
-        pagos.setOnClickListener(v -> payments());
-        evaluar.setOnClickListener(v -> showEvaluation(snap));
-
-        Button detail = btn("Ver detalle del mes");
-        detail.setTextSize(12);
-        detail.setAllCaps(false);
-        detail.setMinHeight(0);
-        detail.setMinimumHeight(0);
-        detail.setPadding(dp(8), dp(5), dp(8), dp(5));
-        detail.setOnClickListener(v -> showMonthDetail(snap));
-        box.addView(detail);
-
-        LinearLayout exports = row();
-        Button copy = miniButton("Copiar a Excel");
-        Button csv = miniButton("Exportar CSV");
-        exports.addView(copy, wt());
-        exports.addView(csv, wt());
-        copy.setOnClickListener(v -> copyWeek());
-        csv.setOnClickListener(v -> exportWeek());
-        box.addView(exports);
-
-        sv.addView(box);
-        body.addView(sv);
-    }
-
-    void showEvaluation(Snap snap) {
-        new AlertDialog.Builder(this)
-                .setTitle(snap.verdict)
-                .setMessage(
-                        snap.advice +
-                        "\n\nProyección de cierre: S/ " + m(snap.endProjection) +
-                        "\nLímite diario: S/ " + m(snap.daily) +
-                        "\nLímite semanal: S/ " + m(snap.weekly)
-                )
-                .setPositiveButton("Entendido", null)
-                .show();
-    }
-
-    void showMonthDetail(Snap snap) {
-        new AlertDialog.Builder(this)
-                .setTitle("Detalle del mes")
-                .setMessage(
-                        "Ingresos: S/ " + m(snap.income) +
-                        "\nGastos: S/ " + m(snap.expenses) +
-                        "\nAhorro: S/ " + m(snap.savings) +
-                        "\nPago de deuda: S/ " + m(snap.debt) +
-                        "\nPagos pendientes: S/ " + m(snap.pending) +
-                        "\nSaldo mínimo intocable: S/ " + m(snap.minimum)
-                )
-                .setPositiveButton("Cerrar", null)
-                .show();
-    }
-
-    void movementForm(Long editId) {
-        movementForm(editId, null);
-    }
-
-    void movementForm(Long editId, String presetType) {
-        body.removeAllViews();
-        ScrollView sv = new ScrollView(this);
-        LinearLayout box = vbox(10);
-        box.addView(txt(editId == null ? "Registrar movimiento" : "Editar movimiento", 18, TEXT, true));
-
-        Rec old = editId == null ? null : db.one(editId);
-        EditText date = input("Fecha AAAA-MM-DD", old == null ? LocalDate.now().toString() : old.date);
-        String initialType = old != null ? old.type : (presetType == null ? "Gasto" : presetType);
-        Spinner type = spin(TYPES, initialType);
-        Spinner cat = spin(CATS, old == null ? "Alimentación" : old.cat);
-        String initialClass = old != null ? old.cls :
-                ("Ingreso".equals(initialType) ? "Ingreso" :
-                ("Ahorro".equals(initialType) ? "Ahorro" : "Necesidad"));
-        Spinner cls = spin(CLS, initialClass);
-        Spinner nat = spin(NAT, old == null ? "Variable" : old.nat);
-        Spinner med = spin(MED, old == null ? "Yape" : old.med);
-        EditText concept = input("Concepto", old == null ? "" : old.concept);
-        EditText amount = num("Monto (S/)", old == null ? "" : m(old.amount));
-        EditText dest = input("Destino / persona / meta", old == null ? "" : old.dest);
-        EditText note = input("Nota", old == null ? "" : old.note);
-
-        View[] fields = {
-                label("Fecha"), date, label("Tipo"), type, label("Categoría"), cat,
-                concept, amount, label("Clasificación"), cls, label("Naturaleza"), nat,
-                label("Medio"), med, dest, note
-        };
-        for (View field : fields) {
-            LinearLayout.LayoutParams fp = new LinearLayout.LayoutParams(-1, -2);
-            fp.setMargins(0, 0, 0, dp(2));
-            field.setLayoutParams(fp);
-            box.addView(field);
-        }
-
-        Button save = primary("GUARDAR MOVIMIENTO");
-        save.setOnClickListener(v -> {
-            try {
-                double value = Double.parseDouble(amount.getText().toString().replace(",", "."));
-                if (value <= 0) throw new IllegalArgumentException();
-                LocalDate.parse(date.getText().toString());
-
-                Rec r = new Rec();
-                r.id = editId == null ? 0 : editId;
-                r.date = date.getText().toString();
-                r.type = type.getSelectedItem().toString();
-                r.cat = cat.getSelectedItem().toString();
-                r.concept = concept.getText().toString().trim();
-                r.amount = value;
-                r.cls = cls.getSelectedItem().toString();
-                r.nat = nat.getSelectedItem().toString();
-                r.med = med.getSelectedItem().toString();
-                r.dest = dest.getText().toString().trim();
-                r.month = r.date.substring(0, 7);
-                r.note = note.getText().toString().trim();
-
-                if (r.concept.isEmpty()) {
-                    toast("Escribe un concepto");
-                    return;
-                }
-
-                if (editId == null) db.add(r);
-                else db.update(r);
-
-                toast("Guardado");
-                dashboard();
-            } catch (Exception e) {
-                toast("Revisa fecha y monto");
-            }
-        });
-        box.addView(save);
-
-        sv.addView(box);
-        body.addView(sv);
-    }
-
-    void movements() {
-        body.removeAllViews();
-        ScrollView sv = new ScrollView(this);
-        LinearLayout box = vbox(12);
-        box.addView(title("Movimientos"));
-
-        List<Rec> list = db.range(
-                LocalDate.now().minusDays(60).toString(),
-                LocalDate.now().toString()
-        );
-
-        if (list.isEmpty()) {
-            box.addView(block("Sin datos", "Aún no has registrado movimientos."));
-        }
-
-        for (Rec r : list) {
-            TextView item = card(
-                    r.date + " • " + r.type +
-                            "\n" + r.concept + " — S/ " + m(r.amount) +
-                            "\n" + r.cat + " • " + r.med,
-                    14, TEXT, false
-            );
-            item.setOnClickListener(v -> new AlertDialog.Builder(this)
-                    .setTitle(r.concept)
-                    .setItems(new String[]{"Editar", "Eliminar", "Cancelar"}, (dialog, which) -> {
-                        if (which == 0) {
-                            movementForm(r.id);
-                        } else if (which == 1) {
-                            new AlertDialog.Builder(this)
-                                    .setMessage("¿Eliminar este movimiento?")
-                                    .setPositiveButton("Eliminar", (dd, ww) -> {
-                                        db.del(r.id);
-                                        movements();
-                                    })
-                                    .setNegativeButton("Cancelar", null)
-                                    .show();
-                        }
-                    })
-                    .show());
-            box.addView(item);
-        }
-
-        sv.addView(box);
-        body.addView(sv);
-    }
-
-    void payments() {
-        body.removeAllViews();
-        ScrollView sv = new ScrollView(this);
-        LinearLayout box = vbox(12);
-        box.addView(title("Pagos mensuales"));
-        box.addView(txt(
-                "Registra alquiler, celular, internet, cuotas u otros compromisos que se repiten cada mes.",
-                13, MUTED, false
-        ));
-
-        Button add = primary("+ AGREGAR PAGO MENSUAL");
-        add.setOnClickListener(v -> paymentDialog());
-        box.addView(add);
-
-        for (Pay p : db.pays()) {
-            YearMonth ym = YearMonth.now();
-            double paid = db.sumExact(
-                    p.type, p.concept,
-                    ym.atDay(1).toString(),
-                    ym.atEndOfMonth().toString()
-            );
-            double pending = Math.max(0, p.amount - paid);
-            String status = pending <= 0
-                    ? "PAGADO"
-                    : (p.day < LocalDate.now().getDayOfMonth() ? "VENCIDO" : "PENDIENTE");
-
-            TextView item = card(
-                    p.concept + " — S/ " + m(p.amount) +
-                            "\nDía " + p.day + " • " + p.type + " • " + status +
-                            (pending > 0 ? "\nPendiente: S/ " + m(pending) : ""),
-                    14,
-                    pending <= 0 ? GREEN : ("VENCIDO".equals(status) ? RED : TEXT),
-                    false
-            );
-            item.setOnLongClickListener(v -> {
-                new AlertDialog.Builder(this)
-                        .setMessage("¿Eliminar " + p.concept + "?")
-                        .setPositiveButton("Eliminar", (dialog, which) -> {
-                            db.delPay(p.id);
-                            payments();
-                        })
-                        .setNegativeButton("Cancelar", null)
-                        .show();
-                return true;
+    public class Bridge {
+        @JavascriptInterface
+        public void copyText(String text) {
+            runOnUiThread(() -> {
+                ClipboardManager cb = (ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
+                cb.setPrimaryClip(ClipData.newPlainText("Control Financiero", text));
+                Toast.makeText(MainActivity.this, "Copiado", Toast.LENGTH_SHORT).show();
             });
-            box.addView(item);
         }
 
-        sv.addView(box);
-        body.addView(sv);
-    }
+        @JavascriptInterface
+        public void saveFile(String filename, String mime, String text) {
+            pendingName = filename == null || filename.isEmpty() ? "export.txt" : filename;
+            pendingMime = mime == null || mime.isEmpty() ? "text/plain" : mime;
+            pendingText = text == null ? "" : text;
+            runOnUiThread(() -> {
+                Intent i = new Intent(Intent.ACTION_CREATE_DOCUMENT);
+                i.addCategory(Intent.CATEGORY_OPENABLE);
+                i.setType(pendingMime);
+                i.putExtra(Intent.EXTRA_TITLE, pendingName);
+                startActivityForResult(i, SAVE_FILE);
+            });
+        }
 
-    void paymentDialog() {
-        LinearLayout box = vbox(12);
-        EditText concept = input("Concepto exacto", "");
-        EditText amount = num("Monto mensual", "");
-        EditText day = num("Día de pago (1-31)", "1");
-        Spinner type = spin(new String[]{"Gasto", "Pago deuda"}, "Gasto");
-        Spinner cat = spin(CATS, "Servicios");
-
-        box.addView(concept);
-        box.addView(amount);
-        box.addView(day);
-        box.addView(label("Tipo"));
-        box.addView(type);
-        box.addView(label("Categoría"));
-        box.addView(cat);
-
-        new AlertDialog.Builder(this)
-                .setTitle("Nuevo pago mensual")
-                .setView(box)
-                .setPositiveButton("Guardar", (dialog, which) -> {
-                    try {
-                        Pay p = new Pay();
-                        p.concept = concept.getText().toString().trim();
-                        p.amount = Double.parseDouble(amount.getText().toString().replace(",", "."));
-                        p.day = Math.max(1, Math.min(31, Integer.parseInt(day.getText().toString())));
-                        p.type = type.getSelectedItem().toString();
-                        p.cat = cat.getSelectedItem().toString();
-                        if (p.concept.isEmpty() || p.amount <= 0) throw new IllegalArgumentException();
-                        db.addPay(p);
-                        payments();
-                    } catch (Exception e) {
-                        toast("Datos inválidos");
-                    }
-                })
-                .setNegativeButton("Cancelar", null)
-                .show();
-    }
-
-    void settings() {
-        body.removeAllViews();
-        ScrollView sv = new ScrollView(this);
-        LinearLayout box = vbox(14);
-        box.addView(title("Ajustes financieros"));
-
-        EditText income = num("Ingreso mensual esperado", sp.getString("income", "2000"));
-        EditText opening = num("Saldo libre al inicio del mes", sp.getString("opening", "0"));
-        EditText minimum = num("Saldo mínimo intocable", sp.getString("minimum", "0"));
-        EditText rate = num("Ahorro objetivo (ej. 0.20 = 20%)", sp.getString("saveRate", "0.20"));
-
-        box.addView(income);
-        box.addView(opening);
-        box.addView(minimum);
-        box.addView(rate);
-
-        Button save = primary("GUARDAR AJUSTES");
-        save.setOnClickListener(v -> {
+        @JavascriptInterface
+        public String legacyData() {
             try {
-                double rr = Double.parseDouble(rate.getText().toString().replace(",", "."));
-                if (rr < 0 || rr > 0.8) throw new IllegalArgumentException();
+                JSONObject root = new JSONObject();
+                JSONArray moves = new JSONArray();
+                JSONArray pays = new JSONArray();
 
-                sp.edit()
-                        .putString("income", income.getText().toString())
-                        .putString("opening", opening.getText().toString())
-                        .putString("minimum", minimum.getText().toString())
-                        .putString("saveRate", rate.getText().toString())
-                        .apply();
+                File dbFile = getDatabasePath("finance.db");
+                if (dbFile.exists()) {
+                    SQLiteDatabase db = SQLiteDatabase.openDatabase(
+                            dbFile.getAbsolutePath(), null, SQLiteDatabase.OPEN_READONLY
+                    );
+                    try {
+                        Cursor c = db.rawQuery("SELECT date,type,cat,concept,amount,cls,nat,med,dest,month,note FROM mov ORDER BY id", null);
+                        while (c.moveToNext()) {
+                            JSONObject m = new JSONObject();
+                            m.put("date", c.getString(0));
+                            m.put("type", c.getString(1));
+                            m.put("category", c.getString(2));
+                            m.put("concept", c.getString(3));
+                            m.put("amount", c.getDouble(4));
+                            m.put("classification", c.getString(5));
+                            m.put("nature", c.getString(6));
+                            m.put("medium", c.getString(7));
+                            m.put("destination", c.getString(8));
+                            m.put("month", c.getString(9));
+                            m.put("note", c.getString(10));
+                            moves.put(m);
+                        }
+                        c.close();
+                    } catch (Exception ignored) {}
 
-                toast("Ajustes guardados");
-                dashboard();
+                    try {
+                        Cursor c = db.rawQuery("SELECT type,concept,cat,amount,day FROM pay ORDER BY id", null);
+                        while (c.moveToNext()) {
+                            JSONObject p = new JSONObject();
+                            p.put("type", c.getString(0));
+                            p.put("concept", c.getString(1));
+                            p.put("category", c.getString(2));
+                            p.put("amount", c.getDouble(3));
+                            p.put("day", c.getInt(4));
+                            p.put("medium", "Yape");
+                            p.put("active", true);
+                            pays.put(p);
+                        }
+                        c.close();
+                    } catch (Exception ignored) {}
+                    db.close();
+                }
+
+                SharedPreferences sp = getSharedPreferences("cfg", MODE_PRIVATE);
+                JSONObject cfg = new JSONObject();
+                cfg.put("expectedIncome", toDouble(sp.getString("income", "2000")));
+                cfg.put("openingBalance", toDouble(sp.getString("opening", "0")));
+                cfg.put("minBalance", toDouble(sp.getString("minimum", "0")));
+                cfg.put("saveRate", toDouble(sp.getString("saveRate", "0.20")));
+
+                root.put("movements", moves);
+                root.put("payments", pays);
+                root.put("config", cfg);
+                root.put("hasData", moves.length() > 0 || pays.length() > 0 || sp.contains("income"));
+                return root.toString();
             } catch (Exception e) {
-                toast("Revisa los valores");
+                return "{\"hasData\":false}";
             }
-        });
-        box.addView(save);
-
-        box.addView(block(
-                "Cómo interpreta tu dinero",
-                "Saldo visible = saldo inicial + entradas - salidas." +
-                        "\nGastable = lo que queda después de reservar pagos mensuales, ahorro objetivo y saldo intocable." +
-                        "\nEl límite diario y semanal se recalcula según los días que faltan del mes."
-        ));
-
-        sv.addView(box);
-        body.addView(sv);
+        }
     }
 
-    Snap snapshot() {
-        LocalDate now = LocalDate.now();
-        YearMonth ym = YearMonth.from(now);
-        String start = ym.atDay(1).toString();
-        String end = ym.atEndOfMonth().toString();
-
-        Snap s = new Snap();
-        s.expected = d(sp.getString("income", "2000"));
-        s.opening = d(sp.getString("opening", "0"));
-        s.minimum = d(sp.getString("minimum", "0"));
-        double rate = d(sp.getString("saveRate", "0.20"));
-
-        s.income = db.sum("Ingreso", start, end);
-        s.expenses = db.sum("Gasto", start, end);
-        s.savings = db.sum("Ahorro", start, end);
-        s.debt = db.sum("Pago deuda", start, end);
-        s.loans = db.sum("Préstamo recibido", start, end);
-        s.collections = db.sum("Cobro", start, end);
-        s.withdraw = db.sum("Retiro ahorro", start, end);
-        s.lent = db.sum("Dinero prestado", start, end);
-
-        s.visible = s.opening + s.income + s.collections + s.loans + s.withdraw
-                - s.expenses - s.savings - s.debt - s.lent;
-
-        for (Pay p : db.pays()) {
-            s.pending += Math.max(
-                    0,
-                    p.amount - db.sumExact(p.type, p.concept, start, end)
-            );
-        }
-
-        double incomeBase = Math.max(s.expected, s.income);
-        s.savePending = Math.max(0, incomeBase * rate - s.savings);
-
-        s.endProjection = s.opening + incomeBase + s.collections + s.withdraw
-                - s.expenses - s.debt - s.lent
-                - s.pending - s.savePending - s.minimum;
-
-        s.spendable = Math.max(0, s.endProjection);
-        s.days = Math.max(1, ym.lengthOfMonth() - now.getDayOfMonth() + 1);
-        s.daily = s.spendable / s.days;
-        s.weekly = Math.min(s.spendable, s.daily * 7);
-
-        if (s.endProjection < 0) {
-            s.verdict = "NO ALCANZA CON EL PLAN ACTUAL";
-            s.advice = "Te faltan aproximadamente S/ " + m(-s.endProjection) +
-                    " para cerrar el mes respetando tus pagos, ahorro y saldo mínimo. " +
-                    "Prioriza vivienda, alimentación, transporte de trabajo, salud y deudas; " +
-                    "reduce primero ocio, compras postergables y viajes.";
-        } else if (s.spendable < 100) {
-            s.verdict = "ALCANZA, PERO ESTÁS MUY AJUSTADO";
-            s.advice = "Tu margen libre es pequeño. Usa como techo S/ " + m(s.daily) +
-                    " por día y evita gastos no esenciales hasta asegurar los pagos del mes.";
-        } else {
-            s.verdict = "VAS EN UN RANGO SOSTENIBLE";
-            s.advice = "Puedes usar como techo aproximado S/ " + m(s.daily) +
-                    " por día o S/ " + m(s.weekly) +
-                    " por semana. Este límite ya reserva tus pagos, tu ahorro objetivo y tu saldo intocable.";
-        }
-
-        if (s.loans > 0) {
-            s.advice += "\n\nImportante: los préstamos recibidos no se consideran ingreso sostenible.";
-        }
-
-        return s;
-    }
-
-    void copyWeek() {
-        LocalDate now = LocalDate.now();
-        LocalDate monday = now.with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY));
-        LocalDate sunday = monday.plusDays(6);
-        String tsv = exportText(db.range(monday.toString(), sunday.toString()), "\t");
-
-        android.content.ClipboardManager clipboard =
-                (android.content.ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
-        clipboard.setPrimaryClip(ClipData.newPlainText("Excel", tsv));
-        toast("Semana copiada. Pégala en Excel desde la primera celda.");
-    }
-
-    void exportWeek() {
-        LocalDate now = LocalDate.now();
-        LocalDate monday = now.with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY));
-        LocalDate sunday = monday.plusDays(6);
-        pendingExport = exportText(db.range(monday.toString(), sunday.toString()), ",");
-
-        Intent i = new Intent(Intent.ACTION_CREATE_DOCUMENT);
-        i.setType("text/csv");
-        i.putExtra(Intent.EXTRA_TITLE, "movimientos_" + monday + "_a_" + sunday + ".csv");
-        startActivityForResult(i, 10);
+    private double toDouble(String x) {
+        try { return Double.parseDouble(x.replace(",", ".")); }
+        catch (Exception e) { return 0; }
     }
 
     @Override
-    protected void onActivityResult(int req, int res, Intent data) {
-        super.onActivityResult(req, res, data);
-        if (req == 10 && res == RESULT_OK && data != null) {
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode == SAVE_FILE && resultCode == RESULT_OK && data != null && data.getData() != null) {
             try (OutputStream out = getContentResolver().openOutputStream(data.getData())) {
-                if (out == null) throw new IllegalStateException("Sin destino");
-                out.write(new byte[]{(byte) 0xEF, (byte) 0xBB, (byte) 0xBF});
-                out.write(pendingExport.getBytes(StandardCharsets.UTF_8));
-                toast("CSV exportado");
-            } catch (Exception e) {
-                toast("No se pudo exportar");
-            }
-        }
-    }
-
-    String exportText(List<Rec> list, String separator) {
-        StringBuilder out = new StringBuilder();
-        out.append(join(
-                separator,
-                "Fecha", "Tipo", "Categoría", "Concepto", "Monto (S/)",
-                "Clasificación", "Naturaleza", "Medio",
-                "Destino / persona / meta", "Mes", "Nota"
-        )).append('\n');
-
-        for (Rec r : list) {
-            out.append(join(
-                    separator,
-                    r.date, r.type, r.cat, r.concept, m(r.amount),
-                    r.cls, r.nat, r.med, r.dest, r.month, r.note
-            )).append('\n');
-        }
-        return out.toString();
-    }
-
-    String join(String separator, String... values) {
-        StringBuilder out = new StringBuilder();
-        for (int i = 0; i < values.length; i++) {
-            if (i > 0) out.append(separator);
-            String x = values[i] == null ? "" : values[i];
-
-            if (",".equals(separator)) {
-                x = x.replace("\"", "\"\"");
-                if (x.contains(",") || x.contains("\n") || x.contains("\"")) {
-                    x = "\"" + x + "\"";
+                if (out != null) {
+                    if (pendingMime.contains("csv")) {
+                        out.write(new byte[]{(byte)0xEF,(byte)0xBB,(byte)0xBF});
+                    }
+                    out.write(pendingText.getBytes(StandardCharsets.UTF_8));
+                    Toast.makeText(this, "Archivo guardado", Toast.LENGTH_SHORT).show();
                 }
-            } else {
-                x = x.replace("\t", " ").replace("\n", " ");
-            }
-            out.append(x);
-        }
-        return out.toString();
-    }
-
-    static class Rec {
-        long id;
-        String date, type, cat, concept, cls, nat, med, dest, month, note;
-        double amount;
-    }
-
-    static class Pay {
-        long id;
-        String type, concept, cat;
-        double amount;
-        int day;
-    }
-
-    static class Snap {
-        double expected, opening, minimum, income, expenses, savings, debt, loans;
-        double collections, withdraw, lent, visible, pending, savePending;
-        double endProjection, spendable, daily, weekly;
-        int days;
-        String verdict, advice;
-    }
-
-    static class DB extends SQLiteOpenHelper {
-        DB(Context c) {
-            super(c, "finance.db", null, 1);
-        }
-
-        @Override
-        public void onCreate(SQLiteDatabase d) {
-            d.execSQL("CREATE TABLE mov(" +
-                    "id INTEGER PRIMARY KEY AUTOINCREMENT," +
-                    "date TEXT,type TEXT,cat TEXT,concept TEXT,amount REAL," +
-                    "cls TEXT,nat TEXT,med TEXT,dest TEXT,month TEXT,note TEXT)");
-            d.execSQL("CREATE TABLE pay(" +
-                    "id INTEGER PRIMARY KEY AUTOINCREMENT," +
-                    "type TEXT,concept TEXT,cat TEXT,amount REAL,day INTEGER)");
-        }
-
-        @Override
-        public void onUpgrade(SQLiteDatabase d, int oldVersion, int newVersion) {
-        }
-
-        void add(Rec r) {
-            getWritableDatabase().insert("mov", null, cv(r));
-        }
-
-        void update(Rec r) {
-            getWritableDatabase().update("mov", cv(r), "id=?", new String[]{String.valueOf(r.id)});
-        }
-
-        void del(long id) {
-            getWritableDatabase().delete("mov", "id=?", new String[]{String.valueOf(id)});
-        }
-
-        ContentValues cv(Rec r) {
-            ContentValues c = new ContentValues();
-            c.put("date", r.date);
-            c.put("type", r.type);
-            c.put("cat", r.cat);
-            c.put("concept", r.concept);
-            c.put("amount", r.amount);
-            c.put("cls", r.cls);
-            c.put("nat", r.nat);
-            c.put("med", r.med);
-            c.put("dest", r.dest);
-            c.put("month", r.month);
-            c.put("note", r.note);
-            return c;
-        }
-
-        Rec one(long id) {
-            Cursor c = getReadableDatabase().rawQuery(
-                    "SELECT * FROM mov WHERE id=?",
-                    new String[]{String.valueOf(id)}
-            );
-            Rec r = c.moveToFirst() ? rec(c) : null;
-            c.close();
-            return r;
-        }
-
-        List<Rec> range(String start, String end) {
-            ArrayList<Rec> list = new ArrayList<>();
-            Cursor c = getReadableDatabase().rawQuery(
-                    "SELECT * FROM mov WHERE date BETWEEN ? AND ? ORDER BY date DESC,id DESC",
-                    new String[]{start, end}
-            );
-            while (c.moveToNext()) list.add(rec(c));
-            c.close();
-            return list;
-        }
-
-        Rec rec(Cursor c) {
-            Rec r = new Rec();
-            r.id = c.getLong(c.getColumnIndexOrThrow("id"));
-            r.date = c.getString(c.getColumnIndexOrThrow("date"));
-            r.type = c.getString(c.getColumnIndexOrThrow("type"));
-            r.cat = c.getString(c.getColumnIndexOrThrow("cat"));
-            r.concept = c.getString(c.getColumnIndexOrThrow("concept"));
-            r.amount = c.getDouble(c.getColumnIndexOrThrow("amount"));
-            r.cls = c.getString(c.getColumnIndexOrThrow("cls"));
-            r.nat = c.getString(c.getColumnIndexOrThrow("nat"));
-            r.med = c.getString(c.getColumnIndexOrThrow("med"));
-            r.dest = c.getString(c.getColumnIndexOrThrow("dest"));
-            r.month = c.getString(c.getColumnIndexOrThrow("month"));
-            r.note = c.getString(c.getColumnIndexOrThrow("note"));
-            return r;
-        }
-
-        double sum(String type, String start, String end) {
-            Cursor c = getReadableDatabase().rawQuery(
-                    "SELECT COALESCE(SUM(amount),0) FROM mov WHERE type=? AND date BETWEEN ? AND ?",
-                    new String[]{type, start, end}
-            );
-            c.moveToFirst();
-            double x = c.getDouble(0);
-            c.close();
-            return x;
-        }
-
-        double sumExact(String type, String concept, String start, String end) {
-            Cursor c = getReadableDatabase().rawQuery(
-                    "SELECT COALESCE(SUM(amount),0) FROM mov " +
-                            "WHERE type=? AND concept=? AND date BETWEEN ? AND ?",
-                    new String[]{type, concept, start, end}
-            );
-            c.moveToFirst();
-            double x = c.getDouble(0);
-            c.close();
-            return x;
-        }
-
-        void addPay(Pay p) {
-            ContentValues c = new ContentValues();
-            c.put("type", p.type);
-            c.put("concept", p.concept);
-            c.put("cat", p.cat);
-            c.put("amount", p.amount);
-            c.put("day", p.day);
-            getWritableDatabase().insert("pay", null, c);
-        }
-
-        void delPay(long id) {
-            getWritableDatabase().delete("pay", "id=?", new String[]{String.valueOf(id)});
-        }
-
-        List<Pay> pays() {
-            ArrayList<Pay> list = new ArrayList<>();
-            Cursor c = getReadableDatabase().rawQuery(
-                    "SELECT * FROM pay ORDER BY day,concept",
-                    null
-            );
-            while (c.moveToNext()) {
-                Pay p = new Pay();
-                p.id = c.getLong(0);
-                p.type = c.getString(1);
-                p.concept = c.getString(2);
-                p.cat = c.getString(3);
-                p.amount = c.getDouble(4);
-                p.day = c.getInt(5);
-                list.add(p);
-            }
-            c.close();
-            return list;
-        }
-    }
-
-    LinearLayout vbox(int padding) {
-        LinearLayout x = new LinearLayout(this);
-        x.setOrientation(LinearLayout.VERTICAL);
-        x.setPadding(dp(padding), dp(padding), dp(padding), dp(padding));
-        return x;
-    }
-
-    LinearLayout row() {
-        LinearLayout x = new LinearLayout(this);
-        x.setOrientation(LinearLayout.HORIZONTAL);
-        return x;
-    }
-
-    LinearLayout.LayoutParams wt() {
-        return new LinearLayout.LayoutParams(0, -2, 1f);
-    }
-
-    TextView txt(String s, int size, int color, boolean bold) {
-        TextView t = new TextView(this);
-        t.setText(s);
-        t.setTextSize(size);
-        t.setTextColor(color);
-        if (bold) t.setTypeface(null, 1);
-        t.setPadding(dp(10), dp(8), dp(10), dp(8));
-        return t;
-    }
-
-    TextView title(String s) {
-        return txt(s, 18, TEXT, true);
-    }
-
-    TextView label(String s) {
-        TextView t = txt(s, 11, MUTED, false);
-        t.setPadding(dp(6), dp(3), dp(6), dp(1));
-        return t;
-    }
-
-    TextView sectionLabel(String s) {
-        TextView t = txt(s, 12, MUTED, true);
-        t.setPadding(dp(6), dp(10), dp(6), dp(4));
-        return t;
-    }
-
-    TextView compactKpi(String heading, double value, int color) {
-        TextView t = card(heading + "\nS/ " + m(value), 13, color, true);
-        t.setPadding(dp(10), dp(8), dp(10), dp(8));
-        LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(0, -2, 1f);
-        p.setMargins(dp(2), dp(2), dp(2), dp(2));
-        t.setLayoutParams(p);
-        return t;
-    }
-
-    TextView card(String s, int size, int color, boolean bold) {
-        TextView t = txt(s, size, color, bold);
-        t.setBackgroundColor(CARD);
-        t.setPadding(dp(14), dp(14), dp(14), dp(14));
-        LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(-1, -2);
-        p.setMargins(0, dp(6), 0, dp(6));
-        t.setLayoutParams(p);
-        return t;
-    }
-
-    TextView block(String heading, String text) {
-        return card(heading + "\n" + text, 14, TEXT, false);
-    }
-
-    TextView kpi(String heading, double value, int color) {
-        return card(heading + "\nS/ " + m(value), 14, color, true);
-    }
-
-    Button btn(String s) {
-        Button b = new Button(this);
-        b.setText(s);
-        b.setTextSize(12);
-        b.setAllCaps(false);
-        b.setMinHeight(0);
-        b.setMinimumHeight(0);
-        b.setPadding(dp(8), dp(7), dp(8), dp(7));
-        return b;
-    }
-
-    Button navButton(String s) {
-        Button b = btn(s);
-        b.setTextSize(10);
-        b.setTextColor(TEXT);
-        b.setBackgroundColor(CARD);
-        b.setPadding(dp(2), dp(2), dp(2), dp(2));
-        return b;
-    }
-
-    Button quickAction(String s) {
-        Button b = btn(s);
-        b.setTextSize(13);
-        b.setTextColor(TEXT);
-        b.setBackgroundColor(CARD);
-        LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(0, dp(48), 1f);
-        p.setMargins(dp(3), dp(3), dp(3), dp(3));
-        b.setLayoutParams(p);
-        return b;
-    }
-
-    Button miniButton(String s) {
-        Button b = btn(s);
-        b.setTextSize(11);
-        LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(0, dp(42), 1f);
-        p.setMargins(dp(3), dp(5), dp(3), 0);
-        b.setLayoutParams(p);
-        return b;
-    }
-
-    Button primary(String s) {
-        Button b = btn(s);
-        b.setTextColor(Color.WHITE);
-        b.setBackgroundColor(Color.rgb(25, 118, 210));
-        return b;
-    }
-
-    EditText input(String hint, String value) {
-        EditText e = new EditText(this);
-        e.setHint(hint);
-        e.setText(value);
-        e.setTextColor(TEXT);
-        e.setHintTextColor(MUTED);
-        e.setTextSize(14);
-        e.setSingleLine(false);
-        e.setPadding(dp(8), dp(5), dp(8), dp(5));
-        return e;
-    }
-
-    EditText num(String hint, String value) {
-        EditText e = input(hint, value);
-        e.setInputType(InputType.TYPE_CLASS_NUMBER | InputType.TYPE_NUMBER_FLAG_DECIMAL);
-        return e;
-    }
-
-    Spinner spin(String[] values, String selected) {
-        Spinner s = new Spinner(this);
-        ArrayAdapter<String> ad = new ArrayAdapter<>(
-                this,
-                android.R.layout.simple_spinner_dropdown_item,
-                values
-        );
-        s.setAdapter(ad);
-        for (int i = 0; i < values.length; i++) {
-            if (values[i].equals(selected)) {
-                s.setSelection(i);
-                break;
+            } catch (Exception e) {
+                Toast.makeText(this, "No se pudo guardar", Toast.LENGTH_SHORT).show();
             }
         }
-        return s;
     }
 
-    void toast(String s) {
-        Toast.makeText(this, s, Toast.LENGTH_SHORT).show();
-    }
-
-    int dp(int value) {
-        return (int) (value * getResources().getDisplayMetrics().density + 0.5f);
-    }
-
-    double d(String x) {
-        try {
-            return Double.parseDouble(x.replace(",", "."));
-        } catch (Exception e) {
-            return 0;
-        }
-    }
-
-    static String m(double x) {
-        return String.format(Locale.US, "%.2f", x);
+    @Override
+    public void onBackPressed() {
+        web.evaluateJavascript("window.appBack ? window.appBack() : false", value -> {
+            if (!"true".equals(value)) MainActivity.super.onBackPressed();
+        });
     }
 }
