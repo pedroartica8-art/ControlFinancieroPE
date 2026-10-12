@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>Control Financiero PE</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="topbar">
+  <div>
+    <div class="brand">Control Financiero PE</div>
+    <div class="subtitle">Gastos · ahorro · mudanza · metas</div>
+  </div>
+  <button id="quickBtn" class="primary small">+ Movimiento</button>
+</header>
+<nav id="tabs" class="tabs"></nav>
+<main id="app"></main>
+<button id="fab" class="fab primary">+</button>
+<div id="toast" class="toast"></div>
+<div id="modal" class="modal hidden">
+  <div class="modal-card">
+    <div class="modal-head">
+      <b id="modalTitle"></b>
+      <button id="modalClose" class="ghost">✕</button>
+    </div>
+    <div id="modalBody"></div>
+  </div>
+</div>
+<script src="app.js"></script>
+</body>
+</html>
